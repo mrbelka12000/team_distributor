@@ -101,4 +101,4 @@ jobs:
 
       - name: Deploy to server
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.USER_IP }} "docker service update --force --image ghcr.io/mrbelka12000/team_distributor:latest team_distributor-service"
+          ssh -o StrictHostKeyChecking=no ${{ secrets.USER_IP }} "docker compose -f /opt/my_services/team_distributor/docker-compose.yml pull && docker compose -f /opt/my_services/team_distributor/docker-compose.yml up --force-recreate --build -d"
