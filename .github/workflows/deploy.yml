@@ -1,0 +1,180 @@
+name: CI/CD
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy environment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v -race ./...
+
+  validate-migrations:
+    name: Validate Migrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate migration files
+        run: |
+          MIGRATIONS_DIR="migrations"
+
+          if [ ! -d "$MIGRATIONS_DIR" ]; then
+            echo "Migrations directory not found"
+            exit 0
+          fi
+
+          FILES=$(find "$MIGRATIONS_DIR" -type f -name "*.sql" | sort)
+
+          if [ -z "$FILES" ]; then
+            echo "No migration files found"
+            exit 0
+          fi
+
+          echo "Found migration files:"
+          echo "$FILES"
+          echo ""
+
+          # Validate Goose-style migrations (single file with Up and Down directives)
+          for FILE in $FILES; do
+            FILENAME=$(basename "$FILE")
+
+            # Check filename format (timestamp_name.sql)
+            if ! echo "$FILENAME" | grep -qE '^[0-9]+_[a-z0-9_]+\.sql$'; then
+              echo "ERROR: Invalid migration filename format: $FILENAME"
+              echo "Expected format: YYYYMMDDHHMMSS_migration_name.sql"
+              exit 1
+            fi
+
+            # Check for goose Up directive
+            if ! grep -q "^-- +goose Up" "$FILE"; then
+              echo "ERROR: Missing '-- +goose Up' directive in $FILENAME"
+              exit 1
+            fi
+
+            # Check for goose Down directive
+            if ! grep -q "^-- +goose Down" "$FILE"; then
+              echo "ERROR: Missing '-- +goose Down' directive in $FILENAME"
+              exit 1
+            fi
+
+            echo "✓ $FILENAME: valid Goose migration (Up and Down directives present)"
+          done
+
+          echo ""
+          echo "All migrations validated successfully!"
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [lint, test, validate-migrations]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+
+    env:
+      OWNER: mrbelka12000
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: |
+          echo ${{ secrets.PASSWORD }} | docker login ghcr.io -u $OWNER --password-stdin
+
+      - name: Docker build
+        run: |
+          docker build -f build/Dockerfile -t ghcr.io/$OWNER/<service_name>:prod .
+
+      - name: Docker push
+        run: |
+          docker push ghcr.io/$OWNER/<service_name>:prod
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${{ secrets.SSH_PRIV_KEY }}" > ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PUB_KEY }}" > ~/.ssh/id_rsa.pub
+          chmod 600 ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa.pub
+
+      - name: Deploy to server
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.USER_IP }} "docker service update --image ghcr.io/mrbelka12000/<service_name>:prod <service_name>"
+
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [lint, test, validate-migrations]
+    if: github.event_name == 'workflow_dispatch'
+    environment: development
+
+    env:
+      OWNER: mrbelka12000
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: |
+          echo ${{ secrets.PASSWORD }} | docker login ghcr.io -u $OWNER --password-stdin
+
+      - name: Docker build
+        run: |
+          docker build -f build/Dockerfile -t ghcr.io/$OWNER/<service_name>:dev .
+
+      - name: Docker push
+        run: |
+          docker push ghcr.io/$OWNER/<service_name>:dev
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${{ secrets.SSH_PRIV_KEY }}" > ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PUB_KEY }}" > ~/.ssh/id_rsa.pub
+          chmod 600 ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa.pub
+
+      - name: Deploy to server
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.USER_IP }} "docker service update --image ghcr.io/mrbelka12000/<service_name>:dev <service_name>_dev"
