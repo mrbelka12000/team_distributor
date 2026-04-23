@@ -11,7 +11,7 @@ ADD . .
 
 ENV GO111MODULE=on
 
-RUN go build -o team_distibutor cmd/main.go
+RUN go build -o team_distibutor cmd/bot/main.go
 
 ## Deploy
 FROM alpine
