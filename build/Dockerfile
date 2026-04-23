@@ -1,5 +1,5 @@
 ## Build
-FROM golang:1.24-alpine AS buildenv
+FROM golang:1.25-alpine AS buildenv
 
 ADD go.mod go.sum /
 
